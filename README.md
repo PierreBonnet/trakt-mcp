@@ -16,7 +16,7 @@ python -m pytest
 trakt-mcp
 ```
 
-Set `TRAKT_CLIENT_ID` and `TRAKT_CLIENT_SECRET` locally using your own Trakt application credentials. Configure your MCP client to launch the installed `trakt-mcp` executable over stdio. OAuth tokens default to `~/.trakt-mcp/auth_token.json`; `TRAKT_AUTH_TOKEN_PATH` can override this local storage path.
+Set `TRAKT_CLIENT_ID` locally using your own Trakt application's Client ID. `TRAKT_CLIENT_SECRET` is not required for this server's device-code sign-in and should be omitted from the normal configuration. The code still accepts it optionally when refreshing tokens if explicitly configured. Configure your MCP client to launch the installed `trakt-mcp` executable over stdio. OAuth tokens default to `~/.trakt-mcp/auth_token.json`; `TRAKT_AUTH_TOKEN_PATH` can override this local storage path.
 
 ## Privacy
 
@@ -52,8 +52,7 @@ Installe d'abord le projet avec les commandes ci-dessus. Ouvre la configuration 
         "C:/mcp/trakt-mcp/server.py"
       ],
       "env": {
-        "TRAKT_CLIENT_ID": "REPLACE_LOCALLY",
-        "TRAKT_CLIENT_SECRET": "REPLACE_LOCALLY"
+        "TRAKT_CLIENT_ID": "REPLACE_LOCALLY"
       }
     }
   }
@@ -88,7 +87,9 @@ Les commandes ci-dessus supposent des chemins sans espaces pour la commande enca
 
 ### Session et authentification
 
-Renseigne les identifiants de ta propre application Trakt localement. Utilise `start_device_auth`, suis le lien et le code de connexion, puis appelle `check_auth_status`. Le serveur conserve le jeton localement ; `clear_auth` supprime la connexion locale. Ne colle jamais les jetons ou le client secret dans une conversation.
+Renseigne uniquement `TRAKT_CLIENT_ID` pour la configuration habituelle. Utilise `start_device_auth`, suis le lien et le code de connexion, puis appelle `check_auth_status`. Ce serveur utilise le flux par code d'appareil, pas PKCE. Le serveur conserve le jeton localement ; `clear_auth` supprime la connexion locale. Ne colle jamais les jetons dans une conversation.
+
+Trakt recommande PKCE pour le flux OAuth avec redirection et indique que le Client Secret est déprécié pour la connexion utilisateur : [documentation officielle](https://developer.trakt.tv/docs/authentication-oauth). Cela ne rend pas `TRAKT_CLIENT_SECRET` obligatoire pour le flux par code d'appareil implémenté ici.
 
 ### Vérification et dépannage
 

@@ -14,7 +14,6 @@ def test_stdio_discovery_from_another_directory_without_real_credentials(tmp_pat
             cwd=str(tmp_path),
             env={
                 "TRAKT_CLIENT_ID": "fixture-client",
-                "TRAKT_CLIENT_SECRET": "fixture-secret",
                 "TRAKT_AUTH_TOKEN_PATH": str(tmp_path / "absent.json"),
             },
         )
