@@ -1,0 +1,494 @@
+"""Tests for the models.user module."""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+
+import pytest
+from pydantic import ValidationError
+
+from models.shows.show import TraktShow
+from models.types.ids import TraktIds
+from models.user import TraktUserShow
+
+if TYPE_CHECKING:
+    from models.types.api_responses import UserWatchedShow
+    from tests.models.test_data_types import SeasonData, ShowTestData, UserShowTestData
+
+
+class TestTraktUserShow:
+    """Tests for the TraktUserShow model."""
+
+    def test_valid_user_show_creation(self):
+        """Test creating a valid TraktUserShow instance."""
+        show_data: ShowTestData = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1", "slug": "breaking-bad"},
+            "overview": (
+                "A high school chemistry teacher diagnosed with inoperable lung cancer."
+            ),
+        }
+
+        user_show_data: UserShowTestData = {
+            "show": show_data,
+            "last_watched_at": "2023-01-15T20:30:00Z",
+            "last_updated_at": "2023-01-16T10:00:00Z",
+            "plays": 5,
+        }
+
+        user_show = TraktUserShow(**user_show_data)  # type: ignore[arg-type] # Testing: Type validation
+
+        assert user_show.show.title == "Breaking Bad"
+        assert user_show.show.year == 2008
+        assert user_show.last_watched_at == "2023-01-15T20:30:00Z"
+        assert user_show.last_updated_at == "2023-01-16T10:00:00Z"
+        assert user_show.plays == 5
+        assert user_show.seasons is None
+
+    def test_user_show_with_seasons(self):
+        """Test creating user show with seasons data."""
+        show_data: ShowTestData = {
+            "title": "Game of Thrones",
+            "year": 2011,
+            "ids": {"trakt": "1390"},
+        }
+
+        seasons_data: list[SeasonData] = [
+            {
+                "number": 1,
+                "episodes": [
+                    {
+                        "number": 1,
+                        "completed": True,
+                        "last_watched_at": "2023-01-01T20:00:00Z",
+                    },
+                    {
+                        "number": 2,
+                        "completed": True,
+                        "last_watched_at": "2023-01-02T20:00:00Z",
+                    },
+                ],
+            },
+            {
+                "number": 2,
+                "episodes": [
+                    {
+                        "number": 1,
+                        "completed": True,
+                        "last_watched_at": "2023-01-03T20:00:00Z",
+                    },
+                ],
+            },
+        ]
+
+        user_show_data: UserShowTestData = {
+            "show": show_data,
+            "last_watched_at": "2023-01-15T20:30:00Z",
+            "last_updated_at": "2023-01-16T10:00:00Z",
+            "plays": 10,
+            "seasons": seasons_data,
+        }
+
+        user_show = TraktUserShow(**user_show_data)  # type: ignore[arg-type] # Testing: Complex season data structure
+
+        assert user_show.show.title == "Game of Thrones"
+        assert user_show.seasons is not None
+        assert len(user_show.seasons) == 2
+        assert user_show.seasons[0]["number"] == 1
+        assert len(user_show.seasons[0]["episodes"]) == 2
+        assert user_show.plays == 10
+
+    def test_user_show_required_fields(self):
+        """Test that required fields must be provided."""
+        with pytest.raises(ValidationError) as exc_info:
+            TraktUserShow()  # type: ignore[call-arg] # Testing: Pydantic validation with invalid types
+
+        errors = exc_info.value.errors()
+        required_fields = {error["loc"][0] for error in errors}
+
+        # Check all required fields are present
+        expected_required = {"show", "last_watched_at", "last_updated_at", "plays"}
+        assert expected_required.issubset(required_fields)
+
+    def test_user_show_missing_show(self):
+        """Test that show field is required."""
+        with pytest.raises(ValidationError) as exc_info:
+            TraktUserShow(  # type: ignore[call-arg] # Testing: Type validation
+                last_watched_at="2023-01-15T20:30:00Z",
+                last_updated_at="2023-01-16T10:00:00Z",
+                plays=5,
+            )
+
+        errors = exc_info.value.errors()
+        assert any(error["loc"] == ("show",) for error in errors)
+
+    def test_user_show_missing_timestamps(self):
+        """Test that timestamp fields are required."""
+        show_data = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1"},
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            TraktUserShow(show=show_data, plays=5)  # type: ignore[arg-type,call-arg] # Testing: Type validation
+
+        errors = exc_info.value.errors()
+        error_fields = {error["loc"][0] for error in errors}
+        assert "last_watched_at" in error_fields
+        assert "last_updated_at" in error_fields
+
+    def test_user_show_missing_plays(self):
+        """Test that plays field is required."""
+        show_data = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1"},
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            TraktUserShow(  # type: ignore[arg-type,call-arg] # Testing: Type validation
+                show=show_data,
+                last_watched_at="2023-01-15T20:30:00Z",
+                last_updated_at="2023-01-16T10:00:00Z",
+            )
+
+        errors = exc_info.value.errors()
+        assert any(error["loc"] == ("plays",) for error in errors)
+
+    def test_user_show_field_types(self):
+        """Test that fields have correct types."""
+        show_data = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1"},
+        }
+
+        # Test wrong type for plays
+        with pytest.raises(ValidationError):
+            TraktUserShow(
+                show=show_data,  # type: ignore[arg-type] # Testing: Type validation
+                last_watched_at="2023-01-15T20:30:00Z",
+                last_updated_at="2023-01-16T10:00:00Z",
+                plays=["not", "an", "int"],  # type: ignore[arg-type] # Testing: Pydantic validation with invalid types
+            )
+
+        # Test wrong type for last_watched_at
+        with pytest.raises(ValidationError):
+            TraktUserShow(
+                show=show_data,  # type: ignore[arg-type] # Testing: Type validation
+                last_watched_at=["not", "a", "string"],  # type: ignore[arg-type] # Testing: Pydantic validation with invalid types
+                last_updated_at="2023-01-16T10:00:00Z",
+                plays=5,
+            )
+
+        # Test wrong type for seasons
+        with pytest.raises(ValidationError):
+            TraktUserShow(
+                show=show_data,  # type: ignore[arg-type] # Testing: Type validation
+                last_watched_at="2023-01-15T20:30:00Z",
+                last_updated_at="2023-01-16T10:00:00Z",
+                plays=5,
+                seasons="not_a_list",  # type: ignore[arg-type] # Testing: Should be list
+            )
+
+    def test_user_show_nested_show_validation(self):
+        """Test that nested show validation works."""
+        # Missing required show fields
+        invalid_show_data = {
+            "title": "Breaking Bad",
+            # Missing required 'ids' field
+        }
+
+        with pytest.raises(ValidationError):
+            TraktUserShow(
+                show=invalid_show_data,  # type: ignore[arg-type] # Testing: Type validation
+                last_watched_at="2023-01-15T20:30:00Z",
+                last_updated_at="2023-01-16T10:00:00Z",
+                plays=5,
+            )
+
+    def test_user_show_serialization(self):
+        """Test that TraktUserShow can be serialized."""
+        show_data: ShowTestData = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1"},
+            "overview": "Great show",
+        }
+
+        user_show_data: UserShowTestData = {
+            "show": show_data,
+            "last_watched_at": "2023-01-15T20:30:00Z",
+            "last_updated_at": "2023-01-16T10:00:00Z",
+            "plays": 5,
+            "seasons": None,
+        }
+
+        user_show = TraktUserShow(**user_show_data)  # type: ignore[arg-type] # Testing: Type validation
+        serialized = user_show.model_dump(exclude_none=False)
+
+        assert serialized["show"]["title"] == "Breaking Bad"
+        assert serialized["show"]["ids"]["trakt"] == 1  # String coerced to int
+        assert serialized["last_watched_at"] == "2023-01-15T20:30:00Z"
+        assert serialized["plays"] == 5
+
+    def test_user_show_json_serialization(self):
+        """Test that TraktUserShow can be serialized to JSON."""
+        show_data: ShowTestData = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1"},
+            "overview": "Great show",
+        }
+
+        user_show_data: UserShowTestData = {
+            "show": show_data,
+            "last_watched_at": "2023-01-15T20:30:00Z",
+            "last_updated_at": "2023-01-16T10:00:00Z",
+            "plays": 5,
+        }
+
+        user_show = TraktUserShow(**user_show_data)  # type: ignore[arg-type] # Testing: Type validation
+        json_str = user_show.model_dump_json(exclude_none=False)
+
+        # Should be valid JSON
+        parsed = json.loads(json_str)
+
+        assert parsed["show"]["title"] == "Breaking Bad"
+        assert parsed["show"]["ids"]["trakt"] == 1  # String coerced to int
+        assert parsed["last_watched_at"] == "2023-01-15T20:30:00Z"
+        assert parsed["plays"] == 5
+        assert parsed["seasons"] is None  # Default value should be included
+
+    def test_user_show_with_traktshow_instance(self):
+        """Test creating TraktUserShow with TraktShow instance."""
+        show = TraktShow(
+            title="Breaking Bad",
+            year=2008,
+            ids=TraktIds(trakt=1),
+            overview="Great show",
+        )
+
+        user_show = TraktUserShow(
+            show=show,
+            last_watched_at="2023-01-15T20:30:00Z",
+            last_updated_at="2023-01-16T10:00:00Z",
+            plays=5,
+        )
+
+        assert user_show.show.title == "Breaking Bad"
+        assert user_show.show.year == 2008
+        assert isinstance(user_show.show, TraktShow)
+
+    def test_user_show_complex_seasons_data(self):
+        """Test user show with complex seasons data structure."""
+        show_data: ShowTestData = {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1"},
+        }
+
+        complex_seasons: list[SeasonData] = [
+            {
+                "number": 1,
+                "aired": 7,
+                "completed": 7,
+                "episodes": [
+                    {
+                        "number": 1,
+                        "plays": 1,
+                        "last_watched_at": "2023-01-01T20:00:00Z",
+                        "completed": True,
+                    },
+                    {
+                        "number": 2,
+                        "plays": 1,
+                        "last_watched_at": "2023-01-02T20:00:00Z",
+                        "completed": True,
+                    },
+                    {
+                        "number": 3,
+                        "plays": 2,
+                        "last_watched_at": "2023-01-03T20:00:00Z",
+                        "completed": True,
+                    },
+                ],
+            }
+        ]
+
+        user_show_data: UserShowTestData = {
+            "show": show_data,
+            "last_watched_at": "2023-01-15T20:30:00Z",
+            "last_updated_at": "2023-01-16T10:00:00Z",
+            "plays": 15,
+            "seasons": complex_seasons,
+        }
+
+        user_show = TraktUserShow(**user_show_data)  # type: ignore[arg-type] # Testing: Complex season data structure
+
+        assert user_show.seasons is not None
+        assert len(user_show.seasons) == 1
+        season = user_show.seasons[0]
+        assert season["number"] == 1
+        # Note: aired and completed are test-only fields, not in actual API response
+        assert len(season["episodes"]) == 3
+
+        # Check first episode
+        episode = season["episodes"][0]
+        assert episode["number"] == 1
+        assert episode.get("plays") == 1
+        # Note: completed is a test-only field, not in actual API response
+
+    def test_user_show_empty_seasons(self):
+        """Test user show with empty seasons list."""
+        show_data: ShowTestData = {
+            "title": "New Show",
+            "year": 2023,
+            "ids": {"trakt": "999"},
+        }
+
+        user_show_data: UserShowTestData = {
+            "show": show_data,
+            "last_watched_at": "2023-01-15T20:30:00Z",
+            "last_updated_at": "2023-01-16T10:00:00Z",
+            "plays": 0,
+            "seasons": [],  # Empty list
+        }
+
+        user_show = TraktUserShow(**user_show_data)  # type: ignore[arg-type] # Testing: Type validation
+
+        assert user_show.seasons == []
+        assert user_show.plays == 0
+
+    def test_user_show_from_api_response(self):
+        """Test creating user show from typical API response."""
+        # Simulate typical API response from Trakt
+        api_response: UserWatchedShow = {
+            "last_watched_at": "2023-12-01T21:00:00.000Z",
+            "last_updated_at": "2023-12-01T21:05:00.000Z",
+            "plays": 62,
+            "show": {
+                "title": "Breaking Bad",
+                "year": 2008,
+                "ids": {
+                    "trakt": 1,
+                    "slug": "breaking-bad",
+                    "tvdb": 81189,
+                    "imdb": "tt0903747",
+                    "tmdb": 1396,
+                },
+                "overview": (
+                    "A high school chemistry teacher diagnosed with inoperable "
+                    "lung cancer turns to manufacturing and selling "
+                    "methamphetamine in order to secure his family's future "
+                    "before he dies."
+                ),
+            },
+            "seasons": [
+                {
+                    "number": 1,
+                    "episodes": [
+                        {
+                            "number": 1,
+                            "plays": 1,
+                            "last_watched_at": "2023-01-01T20:00:00.000Z",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        # Create user show directly from API response
+        user_show = TraktUserShow(
+            show=TraktShow(
+                title=api_response["show"]["title"],
+                year=api_response["show"]["year"],
+                ids=TraktIds(
+                    trakt=1,
+                    slug="breaking-bad",
+                    tvdb=81189,
+                    imdb="tt0903747",
+                    tmdb=1396,
+                ),
+                overview=api_response["show"].get("overview", ""),
+            ),
+            last_watched_at=api_response["last_watched_at"],
+            last_updated_at=api_response["last_updated_at"],
+            plays=api_response["plays"],
+            seasons=[
+                {
+                    "number": 1,
+                    "episodes": [
+                        {
+                            "number": 1,
+                            "plays": 1,
+                            "last_watched_at": "2023-01-01T20:00:00.000Z",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        assert user_show.show.title == "Breaking Bad"
+        assert user_show.show.year == 2008
+        assert user_show.plays == 62
+        assert user_show.seasons is not None
+        assert len(user_show.seasons) == 1
+        assert user_show.seasons[0]["number"] == 1
+
+    def test_user_show_plays_validation(self):
+        """Test plays field validation."""
+        show_data: ShowTestData = {
+            "title": "Test Show",
+            "year": 2022,
+            "ids": {"trakt": "1"},
+        }
+
+        # Test negative plays (currently allowed - model uses plain int, unconstrained)
+        # Note: If domain requires non-negative counts, consider conint(ge=0)
+        user_show = TraktUserShow(
+            show=show_data,  # type: ignore[arg-type] # Testing: Type validation
+            last_watched_at="2023-01-15T20:30:00Z",
+            last_updated_at="2023-01-16T10:00:00Z",
+            plays=-1,  # Negative plays currently allowed as it's just an int
+        )
+        assert user_show.plays == -1
+
+        # Test large number of plays
+        user_show = TraktUserShow(
+            show=show_data,  # type: ignore[arg-type] # Testing: Type validation
+            last_watched_at="2023-01-15T20:30:00Z",
+            last_updated_at="2023-01-16T10:00:00Z",
+            plays=999999,
+        )
+        assert user_show.plays == 999999
+
+    @pytest.mark.parametrize(
+        "last_watched,last_updated",
+        [
+            ("2023-01-15T20:30:00.123Z", "2023-01-16T10:00:00.456Z"),
+            ("2023-01-15T20:30:00Z", "2023-01-16T10:00:00Z"),
+            ("2023-01-15T20:30:00+00:00", "2023-01-16T10:00:00-05:00"),
+        ],
+    )
+    def test_user_show_timestamp_formats_param(
+        self, last_watched: str, last_updated: str
+    ):
+        """Test various timestamp formats."""
+        show_data: ShowTestData = {
+            "title": "Test Show",
+            "year": 2022,
+            "ids": {"trakt": "1"},
+        }
+
+        user_show = TraktUserShow(
+            show=show_data,  # type: ignore[arg-type] # Testing: Type validation
+            last_watched_at=last_watched,
+            last_updated_at=last_updated,
+            plays=1,
+        )
+        assert user_show.last_watched_at == last_watched
+        assert user_show.last_updated_at == last_updated

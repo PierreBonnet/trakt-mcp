@@ -1,0 +1,190 @@
+import os
+import time
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+from client.checkin import CheckinClient
+from models.auth import TraktAuthToken
+from utils.api.error_types import AuthenticationRequiredError
+
+
+@pytest.mark.asyncio
+async def test_checkin_to_show():
+    mock_response = Mock()
+    mock_response.json.return_value = {
+        "id": 12345,
+        "watched_at": "2023-06-20T20:00:00.000Z",
+        "sharing": {"twitter": True, "tumblr": False},
+        "show": {
+            "title": "Breaking Bad",
+            "year": 2008,
+            "ids": {"trakt": "1", "slug": "breaking-bad"},
+        },
+        "episode": {
+            "season": 1,
+            "number": 1,
+            "title": "Pilot",
+            "ids": {"trakt": "73640"},
+        },
+    }
+    mock_response.raise_for_status = Mock()
+
+    with (
+        patch("httpx.AsyncClient") as mock_client,
+        patch("dotenv.load_dotenv"),
+        patch.dict(
+            os.environ,
+            {"TRAKT_CLIENT_ID": "test_id", "TRAKT_CLIENT_SECRET": "test_secret"},
+        ),
+    ):
+        # Create mock instance with async methods
+        mock_instance = Mock()
+        mock_instance.post = AsyncMock(return_value=mock_response)
+        mock_instance.get = AsyncMock()
+        mock_instance.aclose = AsyncMock()
+        mock_client.return_value = mock_instance
+
+        client = CheckinClient()
+        # Set up authentication
+        client.auth_token = TraktAuthToken(
+            access_token="test_token",
+            refresh_token="test_refresh",
+            expires_in=7200,
+            created_at=int(time.time()),
+            scope="public",
+            token_type="bearer",
+        )
+
+        result = await client.checkin_to_show(
+            show_id="1",
+            episode_season=1,
+            episode_number=1,
+            message="Watching the pilot!",
+        )
+        assert not isinstance(result, str)
+
+        assert isinstance(result, dict)
+        assert result["id"] == 12345  # id is int in CheckinResponse
+
+        # Type-safe access to optional fields
+        show = result.get("show")
+        assert show is not None
+        assert show["title"] == "Breaking Bad"
+
+        episode = result.get("episode")
+        assert episode is not None
+        assert episode.get("title") == "Pilot"
+
+
+@pytest.mark.asyncio
+async def test_checkin_to_show_with_title():
+    mock_response = Mock()
+    mock_response.json.return_value = {
+        "id": 67890,
+        "watched_at": "2023-06-20T21:00:00.000Z",
+        "sharing": {"twitter": False, "tumblr": False},
+        "show": {
+            "title": "The Wire",
+            "year": 2002,
+            "ids": {"trakt": "2", "slug": "the-wire"},
+        },
+        "episode": {
+            "season": 1,
+            "number": 2,
+            "title": "The Detail",
+            "ids": {"trakt": "73641"},
+        },
+    }
+    mock_response.raise_for_status = Mock()
+
+    with (
+        patch("httpx.AsyncClient") as mock_client,
+        patch("dotenv.load_dotenv"),
+        patch.dict(
+            os.environ,
+            {"TRAKT_CLIENT_ID": "test_id", "TRAKT_CLIENT_SECRET": "test_secret"},
+        ),
+    ):
+        # Create mock instance with async methods
+        mock_instance = Mock()
+        mock_instance.post = AsyncMock(return_value=mock_response)
+        mock_instance.get = AsyncMock()
+        mock_instance.aclose = AsyncMock()
+        mock_client.return_value = mock_instance
+
+        client = CheckinClient()
+        # Set up authentication
+        client.auth_token = TraktAuthToken(
+            access_token="test_token",
+            refresh_token="test_refresh",
+            expires_in=7200,
+            created_at=int(time.time()),
+            scope="public",
+            token_type="bearer",
+        )
+
+        result = await client.checkin_to_show(
+            show_title="The Wire", episode_season=1, episode_number=2
+        )
+        assert not isinstance(result, str)
+
+        assert isinstance(result, dict)
+        assert result["id"] == 67890  # id is int in CheckinResponse
+
+        # Type-safe access to optional fields
+        show = result.get("show")
+        assert show is not None
+        assert show["title"] == "The Wire"
+
+        episode = result.get("episode")
+        assert episode is not None
+        assert episode.get("title") == "The Detail"
+
+
+@pytest.mark.asyncio
+async def test_checkin_to_show_not_authenticated():
+    with (
+        patch("dotenv.load_dotenv"),
+        patch.dict(
+            os.environ,
+            {"TRAKT_CLIENT_ID": "test_id", "TRAKT_CLIENT_SECRET": "test_secret"},
+        ),
+    ):
+        client = CheckinClient()
+        # Mock authentication to return False
+        client.ensure_authenticated = AsyncMock(return_value=False)
+
+        with pytest.raises(AuthenticationRequiredError) as exc_info:
+            await client.checkin_to_show(
+                show_id="1", episode_season=1, episode_number=1
+            )
+
+        assert "check in to a show" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_checkin_to_show_missing_info():
+    with (
+        patch("dotenv.load_dotenv"),
+        patch.dict(
+            os.environ,
+            {"TRAKT_CLIENT_ID": "test_id", "TRAKT_CLIENT_SECRET": "test_secret"},
+        ),
+    ):
+        client = CheckinClient()
+        # Set up authentication
+        client.auth_token = TraktAuthToken(
+            access_token="test_token",
+            refresh_token="test_refresh",
+            expires_in=7200,
+            created_at=int(time.time()),
+            scope="public",
+            token_type="bearer",
+        )
+
+        # Missing both show_id and show_title
+        with pytest.raises(ValueError) as exc_info:
+            await client.checkin_to_show(episode_season=1, episode_number=1)
+
+        assert "Either show_id or show_title must be provided" in str(exc_info.value)

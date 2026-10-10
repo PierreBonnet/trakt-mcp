@@ -1,0 +1,751 @@
+"""Movie tools for the Trakt MCP server."""
+
+import asyncio
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Literal
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+from client.movies.anticipated import AnticipatedMoviesClient
+from client.movies.boxoffice import BoxOfficeMoviesClient
+from client.movies.client import MoviesClient
+from client.movies.details import MovieDetailsClient
+from client.movies.people import MoviePeopleClient
+from client.movies.popular import PopularMoviesClient
+from client.movies.related import RelatedMoviesClient
+from client.movies.stats import MovieStatsClient
+from client.movies.trending import TrendingMoviesClient
+from client.pool import get_client
+from config.api import DEFAULT_LIMIT
+from config.mcp.descriptions import (
+    EMBED_MARKDOWN_DESCRIPTION,
+    EXTENDED_DESCRIPTION,
+    LIMIT_DESCRIPTION,
+    MOVIE_ID_DESCRIPTION,
+    PAGE_DESCRIPTION,
+    PERIOD_DESCRIPTION,
+)
+from models.formatters.movies import MovieFormatters
+from models.formatters.videos import VideoFormatters
+from server.base import LimitOnly, MovieIdParam, PeriodParams, ToolErrors
+from utils.api.errors import MCPError, handle_api_errors_func
+from utils.api.request_context import set_tool_context
+
+logger = logging.getLogger("trakt_mcp")
+
+# Type alias for tool handlers
+ToolHandler = Callable[..., Awaitable[str]]
+
+
+class MovieSummaryParams(MovieIdParam):
+    """Parameters for movie summary tools with extended option."""
+
+    extended: bool = True
+
+
+class MovieVideoParams(MovieIdParam):
+    """Parameters for movie video tools."""
+
+    embed_markdown: bool = True
+
+
+@handle_api_errors_func
+async def fetch_trending_movies(
+    limit: int = DEFAULT_LIMIT, page: int | None = None
+) -> str:
+    """Fetch trending movies from Trakt.
+
+    Args:
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about trending movies.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = LimitOnly(limit=limit, page=page)
+    limit, page = params.limit, params.page
+
+    client = get_client(TrendingMoviesClient)
+    movies = await client.get_trending_movies(limit=limit, page=page)
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="trending_movies",
+            resource_id="list",
+            error_message=movies,
+            operation="fetch_trending_movies",
+        )
+    return MovieFormatters.format_trending_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_popular_movies(
+    limit: int = DEFAULT_LIMIT, page: int | None = None
+) -> str:
+    """Fetch popular movies from Trakt.
+
+    Args:
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about popular movies.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = LimitOnly(limit=limit, page=page)
+    limit, page = params.limit, params.page
+
+    client = get_client(PopularMoviesClient)
+    movies = await client.get_popular_movies(limit=limit, page=page)
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="popular_movies",
+            resource_id="list",
+            error_message=movies,
+            operation="fetch_popular_movies",
+        )
+    return MovieFormatters.format_popular_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_favorited_movies(
+    limit: int = DEFAULT_LIMIT,
+    period: Literal["daily", "weekly", "monthly", "yearly", "all"] = "weekly",
+    page: int | None = None,
+) -> str:
+    """Fetch most favorited movies from Trakt.
+
+    Args:
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        period: Time period for favorite calculation
+            (daily, weekly, monthly, yearly, all)
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most favorited movies.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = PeriodParams(limit=limit, period=period, page=page)
+    limit, period, page = params.limit, params.period, params.page
+
+    client = get_client(MovieStatsClient)
+    movies = await client.get_favorited_movies(limit=limit, period=period, page=page)
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="favorited_movies",
+            resource_id="list",
+            error_message=movies,
+            operation="fetch_favorited_movies",
+        )
+
+    # Trace structure in debug only (only for list responses to avoid pagination object)
+    if movies and isinstance(movies, list):
+        logger.debug(
+            "Favorited movies API response structure: %s",
+            json.dumps(movies[0], indent=2),
+        )
+
+    return MovieFormatters.format_favorited_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_played_movies(
+    limit: int = DEFAULT_LIMIT,
+    period: Literal["daily", "weekly", "monthly", "yearly", "all"] = "weekly",
+    page: int | None = None,
+) -> str:
+    """Fetch most played movies from Trakt.
+
+    Args:
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        period: Time period for most played (daily, weekly, monthly, yearly, all)
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most played movies.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = PeriodParams(limit=limit, period=period, page=page)
+    limit, period, page = params.limit, params.period, params.page
+
+    client = get_client(MovieStatsClient)
+    movies = await client.get_played_movies(limit=limit, period=period, page=page)
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="played_movies",
+            resource_id="list",
+            error_message=movies,
+            operation="fetch_played_movies",
+        )
+    return MovieFormatters.format_played_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_watched_movies(
+    limit: int = DEFAULT_LIMIT,
+    period: Literal["daily", "weekly", "monthly", "yearly", "all"] = "weekly",
+    page: int | None = None,
+) -> str:
+    """Fetch most watched movies from Trakt.
+
+    Args:
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        period: Time period for most watched (daily, weekly, monthly, yearly, all)
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most watched movies.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = PeriodParams(limit=limit, period=period, page=page)
+    limit, period, page = params.limit, params.period, params.page
+
+    client = get_client(MovieStatsClient)
+    movies = await client.get_watched_movies(limit=limit, period=period, page=page)
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="watched_movies",
+            resource_id="list",
+            error_message=movies,
+            operation="fetch_watched_movies",
+        )
+    return MovieFormatters.format_watched_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_anticipated_movies(
+    limit: int = DEFAULT_LIMIT, page: int | None = None
+) -> str:
+    """Fetch anticipated movies from Trakt.
+
+    Args:
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most anticipated movies.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = LimitOnly(limit=limit, page=page)
+    limit, page = params.limit, params.page
+
+    client = get_client(AnticipatedMoviesClient)
+    movies = await client.get_anticipated_movies(limit=limit, page=page)
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="anticipated_movies",
+            resource_id="list",
+            error_message=movies,
+            operation="fetch_anticipated_movies",
+        )
+    return MovieFormatters.format_anticipated_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_boxoffice_movies() -> str:
+    """Fetch the top 10 grossing movies in the U.S. box office last weekend.
+
+    Updated every Monday morning. Returns exactly 10 movies with revenue data.
+
+    Returns:
+        Information about box office movies with revenue.
+    """
+    client = get_client(BoxOfficeMoviesClient)
+    movies = await client.get_boxoffice_movies()
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="boxoffice_movies",
+            resource_id="weekend",
+            error_message=movies,
+            operation="fetch_boxoffice_movies",
+        )
+    return MovieFormatters.format_boxoffice_movies(movies)
+
+
+@handle_api_errors_func
+async def fetch_movie_ratings(movie_id: str) -> str:
+    """Fetch ratings for a movie from Trakt.
+
+    Args:
+        movie_id: Trakt ID, Trakt slug, or IMDB ID
+            (e.g., '1', 'tron-legacy-2010', 'tt1104001')
+
+    Returns:
+        Information about movie ratings including average and distribution
+
+    Raises:
+        InvalidParamsError: If movie_id is invalid
+        InternalError: If an error occurs fetching movie or ratings data
+    """
+    # Validate required parameters via Pydantic
+    params = MovieIdParam(movie_id=movie_id)
+    movie_id = params.movie_id
+    set_tool_context("movie", movie_id)
+
+    try:
+        client = get_client(MovieDetailsClient)
+        movie = await client.get_movie(movie_id)
+
+        # Handle transitional case where API returns error strings
+        if isinstance(movie, str):
+            raise ToolErrors.handle_api_string_error(
+                resource_type="movie",
+                resource_id=movie_id,
+                error_message=movie,
+                operation="fetch_movie_details",
+            )
+
+        movie_title = movie.get("title", f"Movie ID: {movie_id}")
+
+        ratings = await client.get_movie_ratings(movie_id)
+
+        # Handle transitional case where API returns error strings
+        if isinstance(ratings, str):
+            raise ToolErrors.handle_api_string_error(
+                resource_type="movie_ratings",
+                resource_id=movie_id,
+                error_message=ratings,
+                operation="fetch_movie_ratings",
+                movie_title=movie_title,
+            )
+
+        return MovieFormatters.format_movie_ratings(ratings, movie_title)
+    except MCPError:
+        raise
+
+
+@handle_api_errors_func
+async def fetch_movie_summary(movie_id: str, extended: bool = True) -> str:
+    """Fetch movie summary from Trakt.
+
+    Args:
+        movie_id: Trakt ID, Trakt slug, or IMDB ID
+            (e.g., '1', 'tron-legacy-2010', 'tt1104001')
+        extended: If True, return comprehensive data with production status and
+                 metadata. If False, return basic movie information
+                 (title, year, IDs).
+
+    Returns:
+        Movie information formatted as markdown. Extended mode includes
+        production status, ratings, metadata, and detailed information.
+        Basic mode includes title, year, and Trakt ID only.
+
+    Raises:
+        InvalidParamsError: If movie_id is invalid
+        InternalError: If an error occurs fetching movie data
+    """
+    # Validate required parameters via Pydantic
+    params = MovieSummaryParams(movie_id=movie_id, extended=extended)
+    movie_id, extended = params.movie_id, params.extended
+    set_tool_context("movie", movie_id)
+
+    try:
+        client = get_client(MovieDetailsClient)
+        if extended:
+            movie = await client.get_movie_extended(movie_id)
+            # Handle transitional case where API returns error strings
+            if isinstance(movie, str):
+                raise ToolErrors.handle_api_string_error(
+                    resource_type="movie_extended",
+                    resource_id=movie_id,
+                    error_message=movie,
+                    operation="fetch_movie_extended",
+                )
+            return MovieFormatters.format_movie_extended(movie)
+        else:
+            movie = await client.get_movie(movie_id)
+            # Handle transitional case where API returns error strings
+            if isinstance(movie, str):
+                raise ToolErrors.handle_api_string_error(
+                    resource_type="movie",
+                    resource_id=movie_id,
+                    error_message=movie,
+                    operation="fetch_movie_summary",
+                )
+            return MovieFormatters.format_movie_summary(movie)
+    except MCPError:
+        raise
+
+
+@handle_api_errors_func
+async def fetch_movie_videos(movie_id: str, embed_markdown: bool = True) -> str:
+    """Fetch videos for a movie from Trakt.
+
+    Args:
+        movie_id: Trakt ID, Trakt slug, or IMDB ID
+            (e.g., '1', 'tron-legacy-2010', 'tt1104001')
+        embed_markdown: Use embedded markdown syntax for video links
+
+    Returns:
+        Markdown formatted list of videos
+    """
+    # Validate required parameters via Pydantic
+    params = MovieVideoParams(movie_id=movie_id, embed_markdown=embed_markdown)
+    movie_id, embed_markdown = params.movie_id, params.embed_markdown
+    set_tool_context("movie", movie_id)
+
+    try:
+        client: MoviesClient = get_client(MoviesClient)
+        videos = await client.get_videos(movie_id)
+        # Transitional safeguard if client returns string errors
+        if isinstance(videos, str):
+            raise ToolErrors.handle_api_string_error(
+                resource_type="movie_videos",
+                resource_id=movie_id,
+                error_message=videos,
+                operation="fetch_movie_videos",
+            )
+
+        # Get movie title for context, fallback to ID if fetch fails
+        try:
+            movie = await client.get_movie(movie_id)
+
+            # Handle transitional case where API returns error strings
+            if isinstance(movie, str):
+                raise ToolErrors.handle_api_string_error(
+                    resource_type="movie",
+                    resource_id=movie_id,
+                    error_message=movie,
+                    operation="fetch_movie_for_videos",
+                )
+
+            title = movie.get("title", f"Movie ID: {movie_id}")
+        except Exception as e:
+            # Best-effort title lookup - don't fail the whole operation
+            logger.debug(
+                "Non-fatal exception during movie title lookup: %s (movie_id: %s)",
+                str(e),
+                movie_id,
+                exc_info=True,
+            )
+            # Use movie_id as fallback title if movie fetch fails
+            title = f"Movie ID: {movie_id}"
+
+        return VideoFormatters.format_videos_list(
+            videos, title, embed_markdown, validate_input=False
+        )
+    except MCPError:
+        raise
+
+
+@handle_api_errors_func
+async def fetch_related_movies(
+    movie_id: str,
+    limit: int = DEFAULT_LIMIT,
+    page: int | None = None,
+) -> str:
+    """Fetch movies related to a specific movie.
+
+    Args:
+        movie_id: Trakt ID, Trakt slug, or IMDB ID
+        limit: Maximum movies to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total movies.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about related movies.
+    """
+    # Validate movie_id
+    id_params = MovieIdParam(movie_id=movie_id)
+    # Validate limit/page
+    params = LimitOnly(limit=limit, page=page)
+    set_tool_context("movie", id_params.movie_id)
+
+    client = get_client(RelatedMoviesClient)
+    movies = await client.get_related_movies(
+        movie_id=id_params.movie_id,
+        limit=params.limit,
+        page=params.page,
+    )
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="related_movies",
+            resource_id=id_params.movie_id,
+            error_message=movies,
+            operation="fetch_related_movies",
+        )
+
+    return MovieFormatters.format_related_movies(movies)
+
+
+async def _get_movie_title(movie_id: str) -> str:
+    """Fetch the movie title for use in formatted responses.
+
+    Falls back to ``Movie ID: <movie_id>`` when the lookup fails
+    for any reason so callers always receive a usable title string.
+
+    Args:
+        movie_id: Trakt ID, slug, or IMDB ID
+
+    Returns:
+        Movie title string, or fallback on failure
+    """
+    try:
+        client = get_client(MovieDetailsClient)
+        movie_data = await client.get_movie(movie_id)
+
+        if isinstance(movie_data, str):
+            return f"Movie ID: {movie_id}"
+
+        return movie_data.get("title", f"Movie ID: {movie_id}")
+    except MCPError as exc:
+        logger.debug(
+            "Non-fatal exception during movie title lookup; falling back to ID title.",
+            exc_info=True,
+            extra={
+                "resource_id": movie_id,
+                "operation": "fetch_movie_title",
+                "error": str(exc),
+            },
+        )
+        return f"Movie ID: {movie_id}"
+
+
+@handle_api_errors_func
+async def fetch_movie_people(movie_id: str) -> str:
+    """Fetch cast and crew for a specific movie.
+
+    Args:
+        movie_id: Trakt ID, slug, or IMDB ID
+
+    Returns:
+        Formatted markdown with cast and crew
+    """
+    params = MovieIdParam(movie_id=movie_id)
+    set_tool_context("movie", params.movie_id)
+
+    people_client = get_client(MoviePeopleClient)
+    movie_title, people = await asyncio.gather(
+        _get_movie_title(params.movie_id),
+        people_client.get_movie_people(params.movie_id),
+    )
+
+    if isinstance(people, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="movie_people",
+            resource_id=params.movie_id,
+            error_message=people,
+            operation="fetch_movie_people",
+            movie_title=movie_title,
+        )
+
+    return MovieFormatters.format_movie_people(people, movie_title)
+
+
+def register_movie_tools(mcp: FastMCP) -> tuple[ToolHandler, ...]:
+    """Register movie tools with the MCP server.
+
+    Returns:
+        Tuple of tool handlers for type checker visibility
+    """
+
+    @mcp.tool(
+        name="fetch_trending_movies",
+        description=(
+            "Fetch trending movies from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_trending_movies_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_trending_movies(limit, page)
+
+    @mcp.tool(
+        name="fetch_popular_movies",
+        description=(
+            "Fetch popular movies from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_popular_movies_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_popular_movies(limit, page)
+
+    @mcp.tool(
+        name="fetch_favorited_movies",
+        description=(
+            "Fetch most favorited movies from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_favorited_movies_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        period: Annotated[
+            Literal["daily", "weekly", "monthly", "yearly", "all"],
+            Field(description=PERIOD_DESCRIPTION),
+        ] = "weekly",
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_favorited_movies(limit, period, page)
+
+    @mcp.tool(
+        name="fetch_played_movies",
+        description=(
+            "Fetch most played movies from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_played_movies_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        period: Annotated[
+            Literal["daily", "weekly", "monthly", "yearly", "all"],
+            Field(description=PERIOD_DESCRIPTION),
+        ] = "weekly",
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_played_movies(limit, period, page)
+
+    @mcp.tool(
+        name="fetch_watched_movies",
+        description=(
+            "Fetch most watched movies from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_watched_movies_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        period: Annotated[
+            Literal["daily", "weekly", "monthly", "yearly", "all"],
+            Field(description=PERIOD_DESCRIPTION),
+        ] = "weekly",
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_watched_movies(limit, period, page)
+
+    @mcp.tool(
+        name="fetch_anticipated_movies",
+        description=(
+            "Fetch most anticipated movies from Trakt, sorted by list count. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_anticipated_movies_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_anticipated_movies(limit, page)
+
+    @mcp.tool(
+        name="fetch_boxoffice_movies",
+        description=(
+            "Fetch the top 10 grossing movies in the U.S. box office last weekend. "
+            "Updated every Monday morning."
+        ),
+    )
+    async def fetch_boxoffice_movies_tool() -> str:
+        return await fetch_boxoffice_movies()
+
+    @mcp.tool(
+        name="fetch_movie_ratings",
+        description="Fetch ratings and voting statistics for a specific movie",
+    )
+    async def fetch_movie_ratings_tool(
+        movie_id: Annotated[str, Field(min_length=1, description=MOVIE_ID_DESCRIPTION)],
+    ) -> str:
+        # Validate parameters with Pydantic
+        params = MovieIdParam(movie_id=movie_id)
+        return await fetch_movie_ratings(params.movie_id)
+
+    @mcp.tool(
+        name="fetch_movie_summary",
+        description=(
+            "Get movie summary from Trakt. "
+            "Default behavior (extended=true): Returns comprehensive data including "
+            "production status, ratings, genres, runtime, certification, and metadata. "
+            "Basic mode (extended=false): Returns only title, year, and Trakt ID."
+        ),
+    )
+    async def fetch_movie_summary_tool(
+        movie_id: Annotated[str, Field(min_length=1, description=MOVIE_ID_DESCRIPTION)],
+        extended: Annotated[bool, Field(description=EXTENDED_DESCRIPTION)] = True,
+    ) -> str:
+        # Validate parameters with Pydantic
+        params = MovieSummaryParams(movie_id=movie_id, extended=extended)
+        return await fetch_movie_summary(params.movie_id, params.extended)
+
+    @mcp.tool(
+        name="fetch_movie_videos",
+        description=(
+            "Get videos (trailers, teasers, etc.) for a movie from Trakt. "
+            "Set embed_markdown=False to return simple links instead of "
+            "YouTube iframes."
+        ),
+    )
+    async def fetch_movie_videos_tool(
+        movie_id: Annotated[str, Field(min_length=1, description=MOVIE_ID_DESCRIPTION)],
+        embed_markdown: Annotated[
+            bool,
+            Field(description=EMBED_MARKDOWN_DESCRIPTION),
+        ] = True,
+    ) -> str:
+        """MCP tool wrapper for fetch_movie_videos."""
+        # Validate parameters with Pydantic
+        params = MovieVideoParams(movie_id=movie_id, embed_markdown=embed_markdown)
+        return await fetch_movie_videos(params.movie_id, params.embed_markdown)
+
+    @mcp.tool(
+        name="fetch_related_movies",
+        description=(
+            "Fetch movies related to a specific movie. Returns similar movies "
+            "based on genres, themes, and viewer patterns. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_related_movies_tool(
+        movie_id: Annotated[str, Field(min_length=1, description=MOVIE_ID_DESCRIPTION)],
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_related_movies(movie_id, limit, page)
+
+    @mcp.tool(
+        name="fetch_movie_people",
+        description=(
+            "Get cast and crew for a movie from Trakt. "
+            "Returns cast with character names and crew "
+            "grouped by department."
+        ),
+    )
+    async def fetch_movie_people_tool(
+        movie_id: Annotated[
+            str,
+            Field(min_length=1, description=MOVIE_ID_DESCRIPTION),
+        ],
+    ) -> str:
+        return await fetch_movie_people(movie_id)
+
+    # Return handlers for type checker visibility
+    return (
+        fetch_trending_movies_tool,
+        fetch_popular_movies_tool,
+        fetch_anticipated_movies_tool,
+        fetch_boxoffice_movies_tool,
+        fetch_favorited_movies_tool,
+        fetch_played_movies_tool,
+        fetch_watched_movies_tool,
+        fetch_movie_ratings_tool,
+        fetch_movie_summary_tool,
+        fetch_movie_videos_tool,
+        fetch_related_movies_tool,
+        fetch_movie_people_tool,
+    )

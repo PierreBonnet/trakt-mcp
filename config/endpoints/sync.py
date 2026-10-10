@@ -1,0 +1,26 @@
+"""Sync endpoints for the Trakt MCP server."""
+
+from collections.abc import Mapping
+from typing import Final
+
+from .keys import EndpointKey
+
+# Sync API endpoints (placeholders use colon syntax and are expanded by client helpers)
+SYNC_ENDPOINTS: Final[Mapping[EndpointKey, str]] = {
+    # Rating endpoints
+    "sync_ratings_get": "/sync/ratings/:type/:rating",
+    "sync_ratings_get_type": "/sync/ratings/:type",
+    "sync_ratings_add": "/sync/ratings",
+    "sync_ratings_remove": "/sync/ratings/remove",
+    # Watchlist endpoints
+    "sync_watchlist_add": "/sync/watchlist",
+    "sync_watchlist_get": "/sync/watchlist/:type/:sort_by/:sort_how",
+    "sync_watchlist_get_all": "/sync/watchlist",
+    "sync_watchlist_get_type": "/sync/watchlist/:type",
+    "sync_watchlist_remove": "/sync/watchlist/remove",
+    # History endpoints
+    "sync_history_get": "/sync/history/:type/:item_id",
+    "sync_history_get_type": "/sync/history/:type",
+    "sync_history_add": "/sync/history",
+    "sync_history_remove": "/sync/history/remove",
+}

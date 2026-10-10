@@ -1,0 +1,107 @@
+"""User resources for the Trakt MCP server."""
+
+from collections.abc import Awaitable, Callable
+from typing import TypeAlias
+
+from mcp.server.fastmcp import FastMCP
+
+from client.pool import get_client
+from client.user import UserClient
+from config.mcp.resources import MCP_RESOURCES
+from models.formatters.user import UserFormatters
+from server.base import ToolErrors
+from utils.api.errors import handle_api_errors_func
+
+# Type alias for resource handlers
+ResourceHandler: TypeAlias = Callable[[], Awaitable[str]]
+
+
+@handle_api_errors_func
+async def get_user_watched_shows() -> str:
+    """Returns shows that the authenticated user has watched.
+    Requires authentication with Trakt.
+
+    Returns:
+        Formatted markdown text with user's watched shows
+    """
+    client: UserClient = get_client(UserClient)
+
+    if not await client.ensure_authenticated():
+        return (
+            "# Authentication Required\n\n"
+            "You need to authenticate with Trakt to view your watched shows.\n"
+            "Use the `start_device_auth` tool to begin authentication."
+        )
+
+    shows = await client.get_user_watched_shows()
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="user_watched_shows",
+            resource_id="authenticated_user",
+            error_message=shows,
+            operation="get_user_watched_shows",
+        )
+    return UserFormatters.format_user_watched_shows(shows)
+
+
+@handle_api_errors_func
+async def get_user_watched_movies() -> str:
+    """Returns movies that the authenticated user has watched.
+    Requires authentication with Trakt.
+
+    Returns:
+        Formatted markdown text with user's watched movies
+    """
+    client: UserClient = get_client(UserClient)
+
+    if not await client.ensure_authenticated():
+        return (
+            "# Authentication Required\n\n"
+            "You need to authenticate with Trakt to view your watched movies.\n"
+            "Use the `start_device_auth` tool to begin authentication."
+        )
+
+    movies = await client.get_user_watched_movies()
+    if isinstance(movies, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="user_watched_movies",
+            resource_id="authenticated_user",
+            error_message=movies,
+            operation="get_user_watched_movies",
+        )
+    return UserFormatters.format_user_watched_movies(movies)
+
+
+def register_user_resources(mcp: FastMCP) -> tuple[ResourceHandler, ResourceHandler]:
+    """Register user resources with the MCP server.
+
+    Returns:
+        Tuple of resource handlers for type checker visibility
+    """
+
+    @mcp.resource(
+        uri=MCP_RESOURCES["user_watched_shows"],
+        name="user_watched_shows",
+        description=(
+            "TV shows watched by the authenticated user from Trakt "
+            "(requires authentication)"
+        ),
+        mime_type="text/markdown",
+    )
+    async def user_watched_shows_resource() -> str:
+        return await get_user_watched_shows()
+
+    @mcp.resource(
+        uri=MCP_RESOURCES["user_watched_movies"],
+        name="user_watched_movies",
+        description=(
+            "Movies watched by the authenticated user from Trakt "
+            "(requires authentication)"
+        ),
+        mime_type="text/markdown",
+    )
+    async def user_watched_movies_resource() -> str:
+        return await get_user_watched_movies()
+
+    # Return handlers for type checker visibility
+    return (user_watched_shows_resource, user_watched_movies_resource)

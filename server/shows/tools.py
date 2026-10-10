@@ -1,0 +1,770 @@
+"""Show tools for the Trakt MCP server."""
+
+import asyncio
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Literal
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+from client.pool import get_client
+from client.shows.anticipated import AnticipatedShowsClient
+from client.shows.client import ShowsClient
+from client.shows.details import ShowDetailsClient
+from client.shows.people import ShowPeopleClient
+from client.shows.popular import PopularShowsClient
+from client.shows.related import RelatedShowsClient
+from client.shows.stats import ShowStatsClient
+from client.shows.trending import TrendingShowsClient
+from config.api import DEFAULT_LIMIT
+from config.mcp.descriptions import (
+    EMBED_MARKDOWN_DESCRIPTION,
+    EXTENDED_DESCRIPTION,
+    GUEST_STARS_DESCRIPTION,
+    LIMIT_DESCRIPTION,
+    PAGE_DESCRIPTION,
+    PERIOD_DESCRIPTION,
+    SHOW_ID_DESCRIPTION,
+)
+from models.formatters.shows import ShowFormatters
+from models.formatters.videos import VideoFormatters
+from server.base import LimitOnly, PeriodParams, ShowIdParam, ToolErrors
+from utils.api.errors import MCPError, handle_api_errors_func
+from utils.api.request_context import set_tool_context
+
+logger = logging.getLogger("trakt_mcp")
+
+# Type alias for tool handlers
+ToolHandler = Callable[..., Awaitable[str]]
+
+
+class ShowSummaryParams(ShowIdParam):
+    """Parameters for show summary tools with extended option."""
+
+    extended: bool = True
+
+
+class ShowVideoParams(ShowIdParam):
+    """Parameters for show video tools."""
+
+    embed_markdown: bool = True
+
+
+@handle_api_errors_func
+async def fetch_trending_shows(
+    limit: int = DEFAULT_LIMIT, page: int | None = None
+) -> str:
+    """Fetch trending shows from Trakt.
+
+    Args:
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about trending shows.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = LimitOnly(limit=limit, page=page)
+    limit, page = params.limit, params.page
+
+    client = get_client(TrendingShowsClient)
+    shows = await client.get_trending_shows(limit=limit, page=page)
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="trending_shows",
+            resource_id="list",
+            error_message=shows,
+            operation="fetch_trending_shows",
+        )
+    return ShowFormatters.format_trending_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_popular_shows(
+    limit: int = DEFAULT_LIMIT, page: int | None = None
+) -> str:
+    """Fetch popular shows from Trakt.
+
+    Args:
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about popular shows.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = LimitOnly(limit=limit, page=page)
+    limit, page = params.limit, params.page
+
+    client = get_client(PopularShowsClient)
+    shows = await client.get_popular_shows(limit=limit, page=page)
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="popular_shows",
+            resource_id="list",
+            error_message=shows,
+            operation="fetch_popular_shows",
+        )
+    return ShowFormatters.format_popular_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_favorited_shows(
+    limit: int = DEFAULT_LIMIT,
+    period: Literal["daily", "weekly", "monthly", "yearly", "all"] = "weekly",
+    page: int | None = None,
+) -> str:
+    """Fetch most favorited shows from Trakt.
+
+    Args:
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        period: Time period for favorite calculation
+            (daily, weekly, monthly, yearly, all)
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most favorited shows.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = PeriodParams(limit=limit, period=period, page=page)
+    limit, period, page = params.limit, params.period, params.page
+
+    client = get_client(ShowStatsClient)
+    shows = await client.get_favorited_shows(limit=limit, period=period, page=page)
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="favorited_shows",
+            resource_id="list",
+            error_message=shows,
+            operation="fetch_favorited_shows",
+        )
+
+    if logger.isEnabledFor(logging.DEBUG) and shows and isinstance(shows, list):
+        logger.debug(
+            "Favorited shows API response structure: %s",
+            json.dumps(shows[0], indent=2),
+        )
+
+    return ShowFormatters.format_favorited_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_played_shows(
+    limit: int = DEFAULT_LIMIT,
+    period: Literal["daily", "weekly", "monthly", "yearly", "all"] = "weekly",
+    page: int | None = None,
+) -> str:
+    """Fetch most played shows from Trakt.
+
+    Args:
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        period: Time period for most played (daily, weekly, monthly, yearly, all)
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most played shows.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = PeriodParams(limit=limit, period=period, page=page)
+    limit, period, page = params.limit, params.period, params.page
+
+    client = get_client(ShowStatsClient)
+    shows = await client.get_played_shows(limit=limit, period=period, page=page)
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="played_shows",
+            resource_id="list",
+            error_message=shows,
+            operation="fetch_played_shows",
+        )
+    return ShowFormatters.format_played_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_watched_shows(
+    limit: int = DEFAULT_LIMIT,
+    period: Literal["daily", "weekly", "monthly", "yearly", "all"] = "weekly",
+    page: int | None = None,
+) -> str:
+    """Fetch most watched shows from Trakt.
+
+    Args:
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        period: Time period for most watched (daily, weekly, monthly, yearly, all)
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most watched shows.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = PeriodParams(limit=limit, period=period, page=page)
+    limit, period, page = params.limit, params.period, params.page
+
+    client = get_client(ShowStatsClient)
+    shows = await client.get_watched_shows(limit=limit, period=period, page=page)
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="watched_shows",
+            resource_id="list",
+            error_message=shows,
+            operation="fetch_watched_shows",
+        )
+    return ShowFormatters.format_watched_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_anticipated_shows(
+    limit: int = DEFAULT_LIMIT, page: int | None = None
+) -> str:
+    """Fetch anticipated shows from Trakt.
+
+    Args:
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about most anticipated shows.
+    """
+    # Validate parameters with Pydantic for normalization and constraints
+    params = LimitOnly(limit=limit, page=page)
+    limit, page = params.limit, params.page
+
+    client = get_client(AnticipatedShowsClient)
+    shows = await client.get_anticipated_shows(limit=limit, page=page)
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="anticipated_shows",
+            resource_id="list",
+            error_message=shows,
+            operation="fetch_anticipated_shows",
+        )
+    return ShowFormatters.format_anticipated_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_show_ratings(show_id: str) -> str:
+    """Fetch ratings for a show from Trakt.
+
+    Args:
+        show_id: Trakt ID, Trakt slug, or IMDB ID
+            (e.g., '1', 'breaking-bad', 'tt0903747')
+
+    Returns:
+        Information about show ratings including average and distribution
+
+    Raises:
+        InvalidParamsError: If show_id is invalid
+        InternalError: If an error occurs fetching show or ratings data
+    """
+    # Validate required parameters via Pydantic
+    params = ShowIdParam(show_id=show_id)
+    show_id = params.show_id
+    set_tool_context("show", show_id)
+
+    try:
+        client: ShowDetailsClient = get_client(ShowDetailsClient)
+        show_data = await client.get_show(show_id)
+
+        # Handle transitional case where API returns error strings
+        if isinstance(show_data, str):
+            raise ToolErrors.handle_api_string_error(
+                resource_type="show",
+                resource_id=show_id,
+                error_message=show_data,
+                operation="fetch_show_details",
+            )
+
+        show_title = show_data.get("title", "Unknown Show")
+        ratings = await client.get_show_ratings(show_id)
+
+        # Handle transitional case where API returns error strings
+        if isinstance(ratings, str):
+            raise ToolErrors.handle_api_string_error(
+                resource_type="show_ratings",
+                resource_id=show_id,
+                error_message=ratings,
+                operation="fetch_show_ratings",
+                show_title=show_title,
+            )
+
+        return ShowFormatters.format_show_ratings(ratings, show_title)
+    except MCPError:
+        raise
+
+
+@handle_api_errors_func
+async def fetch_show_summary(show_id: str, extended: bool = True) -> str:
+    """Fetch show summary from Trakt.
+
+    Args:
+        show_id: Trakt ID, Trakt slug, or IMDB ID
+            (e.g., '1', 'breaking-bad', 'tt0903747')
+        extended: If True, return comprehensive data with air times, production
+                 status and metadata. If False, return basic show information
+                 (title, year, IDs).
+
+    Returns:
+        Show information formatted as markdown. Extended mode includes air
+        times, production status, ratings, metadata, and detailed information.
+        Basic mode includes title, year, and Trakt ID only.
+
+    Raises:
+        InvalidParamsError: If show_id is invalid
+        InternalError: If an error occurs fetching show data
+    """
+    # Validate required parameters via Pydantic
+    params = ShowSummaryParams(show_id=show_id, extended=extended)
+    show_id, extended = params.show_id, params.extended
+    set_tool_context("show", show_id)
+
+    try:
+        client: ShowDetailsClient = get_client(ShowDetailsClient)
+
+        if extended:
+            show_data = await client.get_show_extended(show_id)
+            # Handle transitional case where API returns error strings
+            if isinstance(show_data, str):
+                raise ToolErrors.handle_api_string_error(
+                    resource_type="show_extended",
+                    resource_id=show_id,
+                    error_message=show_data,
+                    operation="fetch_show_extended",
+                )
+            return ShowFormatters.format_show_extended(show_data)
+        else:
+            show_data = await client.get_show(show_id)
+            # Handle transitional case where API returns error strings
+            if isinstance(show_data, str):
+                raise ToolErrors.handle_api_string_error(
+                    resource_type="show",
+                    resource_id=show_id,
+                    error_message=show_data,
+                    operation="fetch_show_summary",
+                )
+            return ShowFormatters.format_show_summary(show_data)
+    except MCPError:
+        raise
+
+
+@handle_api_errors_func
+async def fetch_show_videos(show_id: str, embed_markdown: bool = True) -> str:
+    """Fetch videos for a show from Trakt.
+
+    Args:
+        show_id: Trakt ID, slug, or IMDB ID
+        embed_markdown: Use embedded markdown syntax for video links
+
+    Returns:
+        Markdown formatted list of videos
+    """
+    # Validate required parameters via Pydantic
+    params = ShowVideoParams(show_id=show_id, embed_markdown=embed_markdown)
+    show_id, embed_markdown = params.show_id, params.embed_markdown
+    set_tool_context("show", show_id)
+
+    try:
+        client: ShowsClient = get_client(ShowsClient)
+        videos = await client.get_videos(show_id)
+
+        if isinstance(videos, str):
+            raise ToolErrors.handle_api_string_error(
+                resource_type="show_videos",
+                resource_id=show_id,
+                error_message=videos,
+                operation="fetch_show_videos",
+            )
+
+        # Get show title for context, fallback to ID if fetch fails
+        try:
+            show = await client.get_show(show_id)
+
+            # Transitional case where API may return error strings; don't fail the tool
+            if isinstance(show, str):
+                logger.debug(
+                    "Show lookup returned API error; falling back to ID title.",
+                    extra={
+                        "resource_type": "show",
+                        "resource_id": show_id,
+                        "api_error_message": show,
+                        "operation": "fetch_show_for_videos",
+                    },
+                )
+                title = f"Show ID: {show_id}"
+            else:
+                title = show.get("title", f"Show ID: {show_id}")
+        except Exception:
+            # Best-effort title lookup — don't fail the operation
+            logger.debug(
+                "Non-fatal exception during show title"
+                + " lookup; falling back to ID title.",
+                exc_info=True,
+                extra={"resource_id": show_id, "operation": "fetch_show_for_videos"},
+            )
+            # Use show_id as fallback title if show fetch fails
+            title = f"Show ID: {show_id}"
+
+        return VideoFormatters.format_videos_list(
+            videos, title, embed_markdown, validate_input=False
+        )
+    except MCPError:
+        raise
+
+
+@handle_api_errors_func
+async def fetch_related_shows(
+    show_id: str,
+    limit: int = DEFAULT_LIMIT,
+    page: int | None = None,
+) -> str:
+    """Fetch shows related to a specific show.
+
+    Args:
+        show_id: Trakt ID, Trakt slug, or IMDB ID
+        limit: Maximum shows to return (default: 10, 0=fetch all). When page is
+            None, this caps total results. When page is specified, this is per page.
+        page: Page number. If None, auto-paginates up to 'limit' total shows.
+            If specified, returns that page with pagination metadata.
+
+    Returns:
+        Information about related shows.
+    """
+    # Validate show_id
+    id_params = ShowIdParam(show_id=show_id)
+    # Validate limit/page
+    params = LimitOnly(limit=limit, page=page)
+    set_tool_context("show", id_params.show_id)
+
+    client = get_client(RelatedShowsClient)
+    shows = await client.get_related_shows(
+        show_id=id_params.show_id,
+        limit=params.limit,
+        page=params.page,
+    )
+    if isinstance(shows, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="related_shows",
+            resource_id=id_params.show_id,
+            error_message=shows,
+            operation="fetch_related_shows",
+        )
+
+    return ShowFormatters.format_related_shows(shows)
+
+
+@handle_api_errors_func
+async def fetch_show_seasons(show_id: str) -> str:
+    """Fetch all seasons for a show from Trakt.
+
+    Args:
+        show_id: Trakt ID, Trakt slug, or IMDB ID
+            (e.g., '1', 'breaking-bad', 'tt0903747')
+
+    Returns:
+        Formatted markdown with season details including episode counts and ratings
+    """
+    params = ShowIdParam(show_id=show_id)
+    show_id = params.show_id
+    set_tool_context("show", show_id)
+
+    client = get_client(ShowsClient)
+    seasons = await client.get_seasons(show_id)
+    if isinstance(seasons, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="show_seasons",
+            resource_id=show_id,
+            error_message=seasons,
+            operation="fetch_show_seasons",
+        )
+    return ShowFormatters.format_show_seasons(seasons)
+
+
+async def _get_show_title(show_id: str) -> str:
+    """Fetch the show title for use in formatted responses.
+
+    Falls back to ``Show ID: <show_id>`` when the lookup fails
+    for any reason so callers always receive a usable title string.
+
+    Args:
+        show_id: Trakt ID, slug, or IMDB ID
+
+    Returns:
+        Show title string, or fallback on failure
+    """
+    try:
+        client = get_client(ShowDetailsClient)
+        show_data = await client.get_show(show_id)
+
+        if isinstance(show_data, str):
+            return f"Show ID: {show_id}"
+
+        return show_data.get("title", f"Show ID: {show_id}")
+    except MCPError as exc:
+        logger.debug(
+            "Non-fatal exception during show title lookup; falling back to ID title.",
+            exc_info=True,
+            extra={
+                "resource_id": show_id,
+                "operation": "fetch_show_title",
+                "error": str(exc),
+            },
+        )
+        return f"Show ID: {show_id}"
+
+
+@handle_api_errors_func
+async def fetch_show_people(show_id: str, include_guest_stars: bool = False) -> str:
+    """Fetch cast and crew for a specific show.
+
+    Args:
+        show_id: Trakt ID, slug, or IMDB ID
+        include_guest_stars: Include guest stars in response
+
+    Returns:
+        Formatted markdown with cast and crew
+    """
+    params = ShowIdParam(show_id=show_id)
+    set_tool_context("show", params.show_id)
+
+    people_client = get_client(ShowPeopleClient)
+    show_title, people = await asyncio.gather(
+        _get_show_title(params.show_id),
+        people_client.get_show_people(
+            params.show_id,
+            include_guest_stars=include_guest_stars,
+        ),
+    )
+
+    if isinstance(people, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type="show_people",
+            resource_id=params.show_id,
+            error_message=people,
+            operation="fetch_show_people",
+            show_title=show_title,
+        )
+
+    return ShowFormatters.format_show_people(people, show_title)
+
+
+def register_show_tools(mcp: FastMCP) -> tuple[ToolHandler, ...]:
+    """Register show tools with the MCP server.
+
+    Returns:
+        Tuple of tool handlers for type checker visibility
+    """
+
+    @mcp.tool(
+        name="fetch_trending_shows",
+        description=(
+            "Fetch trending TV shows from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_trending_shows_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_trending_shows(limit, page)
+
+    @mcp.tool(
+        name="fetch_popular_shows",
+        description=(
+            "Fetch popular TV shows from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_popular_shows_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_popular_shows(limit, page)
+
+    @mcp.tool(
+        name="fetch_favorited_shows",
+        description=(
+            "Fetch most favorited TV shows from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_favorited_shows_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        period: Annotated[
+            Literal["daily", "weekly", "monthly", "yearly", "all"],
+            Field(description=PERIOD_DESCRIPTION),
+        ] = "weekly",
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_favorited_shows(limit, period, page)
+
+    @mcp.tool(
+        name="fetch_played_shows",
+        description=(
+            "Fetch most played TV shows from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_played_shows_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        period: Annotated[
+            Literal["daily", "weekly", "monthly", "yearly", "all"],
+            Field(description=PERIOD_DESCRIPTION),
+        ] = "weekly",
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_played_shows(limit, period, page)
+
+    @mcp.tool(
+        name="fetch_watched_shows",
+        description=(
+            "Fetch most watched TV shows from Trakt. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_watched_shows_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        period: Annotated[
+            Literal["daily", "weekly", "monthly", "yearly", "all"],
+            Field(description=PERIOD_DESCRIPTION),
+        ] = "weekly",
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_watched_shows(limit, period, page)
+
+    @mcp.tool(
+        name="fetch_anticipated_shows",
+        description=(
+            "Fetch most anticipated TV shows from Trakt, sorted by list count. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_anticipated_shows_tool(
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_anticipated_shows(limit, page)
+
+    @mcp.tool(
+        name="fetch_show_ratings",
+        description="Fetch ratings and voting statistics for a specific TV show",
+    )
+    async def fetch_show_ratings_tool(
+        show_id: Annotated[str, Field(min_length=1, description=SHOW_ID_DESCRIPTION)],
+    ) -> str:
+        # Validate parameters with Pydantic
+        params = ShowIdParam(show_id=show_id)
+        return await fetch_show_ratings(params.show_id)
+
+    @mcp.tool(
+        name="fetch_show_summary",
+        description=(
+            "Get TV show summary from Trakt. "
+            "Default behavior (extended=true): Returns comprehensive data including "
+            "air times, production status, ratings, genres, runtime, network, and "
+            "metadata. Basic mode (extended=false): Returns only title, year, and "
+            "Trakt ID."
+        ),
+    )
+    async def fetch_show_summary_tool(
+        show_id: Annotated[str, Field(min_length=1, description=SHOW_ID_DESCRIPTION)],
+        extended: Annotated[bool, Field(description=EXTENDED_DESCRIPTION)] = True,
+    ) -> str:
+        # Validate parameters with Pydantic
+        params = ShowSummaryParams(show_id=show_id, extended=extended)
+        return await fetch_show_summary(params.show_id, params.extended)
+
+    @mcp.tool(
+        name="fetch_show_videos",
+        description=(
+            "Get videos (trailers, teasers, etc.) for a show from Trakt. "
+            "Set embed_markdown=False to return simple links instead of "
+            "YouTube iframes."
+        ),
+    )
+    async def fetch_show_videos_tool(
+        show_id: Annotated[str, Field(min_length=1, description=SHOW_ID_DESCRIPTION)],
+        embed_markdown: Annotated[
+            bool,
+            Field(description=EMBED_MARKDOWN_DESCRIPTION),
+        ] = True,
+    ) -> str:
+        """MCP tool wrapper for fetch_show_videos."""
+        # Validate parameters with Pydantic
+        params = ShowVideoParams(show_id=show_id, embed_markdown=embed_markdown)
+        return await fetch_show_videos(params.show_id, params.embed_markdown)
+
+    @mcp.tool(
+        name="fetch_related_shows",
+        description=(
+            "Fetch TV shows related to a specific show. Returns similar shows "
+            "based on genres, themes, and viewer patterns. "
+            "Use page parameter for paginated results, or omit for all results."
+        ),
+    )
+    async def fetch_related_shows_tool(
+        show_id: Annotated[str, Field(min_length=1, description=SHOW_ID_DESCRIPTION)],
+        limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
+        page: Annotated[int | None, Field(description=PAGE_DESCRIPTION)] = None,
+    ) -> str:
+        return await fetch_related_shows(show_id, limit, page)
+
+    @mcp.tool(
+        name="fetch_show_seasons",
+        description=(
+            "Fetch all seasons for a TV show from Trakt, including episode counts, "
+            "aired episodes, and ratings per season."
+        ),
+    )
+    async def fetch_show_seasons_tool(
+        show_id: Annotated[str, Field(min_length=1, description=SHOW_ID_DESCRIPTION)],
+    ) -> str:
+        return await fetch_show_seasons(show_id)
+
+    @mcp.tool(
+        name="fetch_show_people",
+        description=(
+            "Get cast and crew for a TV show from Trakt. "
+            "Set include_guest_stars=true to also return guest stars "
+            "(warning: returns a lot of data)."
+        ),
+    )
+    async def fetch_show_people_tool(
+        show_id: Annotated[
+            str,
+            Field(min_length=1, description=SHOW_ID_DESCRIPTION),
+        ],
+        include_guest_stars: Annotated[
+            bool,
+            Field(description=GUEST_STARS_DESCRIPTION),
+        ] = False,
+    ) -> str:
+        return await fetch_show_people(show_id, include_guest_stars)
+
+    # Return handlers for type checker visibility
+    return (
+        fetch_trending_shows_tool,
+        fetch_popular_shows_tool,
+        fetch_anticipated_shows_tool,
+        fetch_favorited_shows_tool,
+        fetch_played_shows_tool,
+        fetch_watched_shows_tool,
+        fetch_show_ratings_tool,
+        fetch_show_summary_tool,
+        fetch_show_videos_tool,
+        fetch_related_shows_tool,
+        fetch_show_seasons_tool,
+        fetch_show_people_tool,
+    )

@@ -1,0 +1,38 @@
+"""Show models for the Trakt MCP server."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from models.types.ids import TraktIds  # noqa: TC001  # Required at runtime by Pydantic
+
+
+class TraktShow(BaseModel):
+    """Represents a Trakt show."""
+
+    title: str
+    year: int | None = None
+    ids: TraktIds = Field(
+        description="Various IDs for the show (trakt, slug, tvdb, imdb, tmdb)"
+    )
+    overview: str | None = None
+
+
+class TraktTrendingShow(BaseModel):
+    """Represents a trending show from Trakt API."""
+
+    watchers: int = Field(description="Number of people watching this show")
+    show: TraktShow
+
+
+class TraktPopularShow(BaseModel):
+    """Represents a popular show from Trakt API."""
+
+    show: TraktShow = Field(description="The show information")
+
+    @classmethod
+    def from_api_response(cls, api_data: dict[str, Any]) -> TraktPopularShow:
+        """Create a TraktPopularShow instance from raw API data."""
+        return cls(show=TraktShow(**api_data))

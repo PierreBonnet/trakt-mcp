@@ -1,0 +1,638 @@
+"""Tests for utils.api.errors module."""
+
+from collections.abc import Callable
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
+
+from utils.api.error_types import (
+    AuthenticationRequiredError,
+    TraktRateLimitError,
+    TraktResourceNotFoundError,
+    TraktServerError,
+)
+from utils.api.errors import (
+    InternalError,
+    InvalidParamsError,
+    handle_api_errors,
+    handle_api_errors_func,
+)
+
+
+@pytest.fixture
+def mock_async_func() -> AsyncMock:
+    """Create a mock async function for testing."""
+    return AsyncMock()
+
+
+class TestHandleApiErrorsDecorator:
+    """Test handle_api_errors decorator functionality."""
+
+    def test_decorator_preserves_function_metadata(
+        self, mock_async_func: AsyncMock
+    ) -> None:
+        """Test decorator preserves original function metadata."""
+        mock_async_func.__name__ = "test_function"
+        mock_async_func.__doc__ = "Test docstring"
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        assert decorated_func.__name__ == "test_function"
+        assert decorated_func.__doc__ == "Test docstring"
+
+    @pytest.mark.asyncio
+    async def test_successful_function_call(self, mock_async_func: AsyncMock) -> None:
+        """Test decorator passes through successful function calls."""
+        expected_result = {"success": True, "data": "test_data"}
+        mock_async_func.return_value = expected_result
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+        result = await decorated_func("arg1", kwarg1="value1")
+
+        assert result == expected_result
+        mock_async_func.assert_called_once_with("arg1", kwarg1="value1")
+
+    @pytest.mark.asyncio
+    async def test_http_401_unauthorized_error(
+        self, mock_async_func: AsyncMock
+    ) -> None:
+        """Test handling of HTTP 401 Unauthorized error."""
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+
+        http_error = httpx.HTTPStatusError(
+            message="401 Unauthorized", request=MagicMock(), response=mock_response
+        )
+        mock_async_func.side_effect = http_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(AuthenticationRequiredError) as exc_info:
+            await decorated_func()
+
+        assert exc_info.value.message.startswith("Authentication required")
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["error_type"] == "auth_required"
+        assert exc_info.value.data["action"] == "access resource"
+
+    @pytest.mark.asyncio
+    async def test_http_404_not_found_error(self, mock_async_func: AsyncMock) -> None:
+        """Test handling of HTTP 404 Not Found error."""
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.text = "Not Found"
+
+        http_error = httpx.HTTPStatusError(
+            message="404 Not Found", request=MagicMock(), response=mock_response
+        )
+        mock_async_func.side_effect = http_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(TraktResourceNotFoundError) as exc_info:
+            await decorated_func()
+
+        assert (
+            "The requested resource 'unknown' was not found" in exc_info.value.message
+        )
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["http_status"] == 404
+        assert exc_info.value.data["resource_type"] == "resource"
+        assert exc_info.value.data["resource_id"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_http_429_rate_limit_error(self, mock_async_func: AsyncMock) -> None:
+        """Test handling of HTTP 429 Rate Limit error."""
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.text = "Too Many Requests"
+        mock_response.headers = {}
+
+        http_error = httpx.HTTPStatusError(
+            message="429 Too Many Requests", request=MagicMock(), response=mock_response
+        )
+        mock_async_func.side_effect = http_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(TraktRateLimitError) as exc_info:
+            await decorated_func()
+
+        assert exc_info.value.message == "Rate limit exceeded. Please try again later."
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["http_status"] == 429
+        assert "retry_after" not in exc_info.value.data
+
+    @pytest.mark.asyncio
+    async def test_http_unknown_status_error(self, mock_async_func: AsyncMock) -> None:
+        """Test handling of unknown HTTP status error."""
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.text = "Service Unavailable"
+
+        http_error = httpx.HTTPStatusError(
+            message="503 Service Unavailable",
+            request=MagicMock(),
+            response=mock_response,
+        )
+        mock_async_func.side_effect = http_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(TraktServerError) as exc_info:
+            await decorated_func()
+
+        assert (
+            exc_info.value.message
+            == "Service unavailable. Please try again in 30 seconds."
+        )
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["http_status"] == 503
+        assert exc_info.value.data["is_temporary"] is True
+
+    @pytest.mark.asyncio
+    async def test_request_error_handling(self, mock_async_func: AsyncMock) -> None:
+        """Test handling of HTTP request errors."""
+        request_error = httpx.RequestError("Connection failed")
+        mock_async_func.side_effect = request_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(InternalError) as exc_info:
+            await decorated_func()
+
+        assert (
+            exc_info.value.message
+            == "Unable to connect to Trakt API. Please check your internet connection."
+        )
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["error_type"] == "request_error"
+        assert exc_info.value.data["details"] == "Connection failed"
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_handling(self, mock_async_func: AsyncMock) -> None:
+        """Test handling of unexpected errors."""
+
+        # Use a custom exception that's not in the business logic list
+        class UnexpectedException(Exception):
+            pass
+
+        unexpected_error = UnexpectedException("Unexpected error")
+        mock_async_func.side_effect = unexpected_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(InternalError) as exc_info:
+            await decorated_func()
+
+        assert (
+            exc_info.value.message == "An unexpected error occurred: Unexpected error"
+        )
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["error_type"] == "unexpected_error"
+
+    @pytest.mark.asyncio
+    async def test_decorator_with_args_and_kwargs(
+        self, mock_async_func: AsyncMock
+    ) -> None:
+        """Test decorator properly passes args and kwargs."""
+        mock_async_func.return_value = "success"
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+        result = await decorated_func("arg1", "arg2", key1="value1", key2="value2")
+
+        assert result == "success"
+        mock_async_func.assert_called_once_with(
+            "arg1", "arg2", key1="value1", key2="value2"
+        )
+
+    @pytest.mark.asyncio
+    async def test_http_status_error_is_mapped_to_server_error(
+        self, mock_async_func: AsyncMock
+    ) -> None:
+        """Decorator delegates HTTPStatusError to handler, raises TraktServerError."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+
+        http_error = httpx.HTTPStatusError(
+            message="500 Internal Server Error",
+            request=MagicMock(),
+            response=mock_response,
+        )
+        mock_async_func.side_effect = http_error
+
+        decorated_func = handle_api_errors_func(mock_async_func)
+
+        with pytest.raises(TraktServerError):
+            await decorated_func()
+
+        # Logging assertions belong to TraktAPIErrorHandler tests, not this decorator.
+
+
+class TestDecoratorTypes:
+    """Test decorator type annotations and type safety."""
+
+    def test_decorator_is_callable_and_available(self) -> None:
+        """Test that the decorator function is properly imported and callable."""
+        # The decorator should work with both methods and functions
+        assert handle_api_errors_func is not None
+        assert callable(handle_api_errors_func)
+
+    def test_decorator_type_hints(self) -> None:
+        """Test decorator maintains proper type hints."""
+
+        @handle_api_errors_func
+        async def test_func(x: int) -> str:
+            return str(x)
+
+        # Function should still be callable and maintain signature
+        assert callable(test_func)
+
+
+class TestHandleApiErrorsMethodDecorator:
+    """Test handle_api_errors decorator functionality for class methods."""
+
+    class MockService:
+        """Mock service class for testing method decorators."""
+
+        @handle_api_errors
+        async def test_method(self, x: int) -> str:
+            """Test method that returns a string."""
+            return str(x)
+
+        @handle_api_errors
+        async def method_that_raises_http_error(self) -> str:
+            """Test method that raises an HTTP error."""
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.text = "Unauthorized"
+
+            raise httpx.HTTPStatusError(
+                message="401 Unauthorized", request=MagicMock(), response=mock_response
+            )
+
+        @handle_api_errors
+        async def method_that_raises_request_error(self) -> str:
+            """Test method that raises a request error."""
+            raise httpx.RequestError("Connection failed")
+
+    class MockServiceWithClearAuth:
+        """Mock service class with clear_auth_token method for testing auto-clear."""
+
+        def __init__(self) -> None:
+            """Initialize mock service."""
+            self.clear_auth_token_called = False
+
+        def clear_auth_token(self) -> bool:
+            """Mock clear_auth_token method."""
+            self.clear_auth_token_called = True
+            return True
+
+        @handle_api_errors
+        async def method_that_raises_401(self) -> str:
+            """Test method that raises a 401 HTTP error."""
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.text = "Unauthorized"
+
+            raise httpx.HTTPStatusError(
+                message="401 Unauthorized", request=MagicMock(), response=mock_response
+            )
+
+        @handle_api_errors
+        async def method_that_raises_404(self) -> str:
+            """Test method that raises a 404 HTTP error."""
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_response.text = "Not Found"
+            raise httpx.HTTPStatusError(
+                message="404 Not Found",
+                request=MagicMock(),
+                response=mock_response,
+            )
+
+    @pytest.mark.asyncio
+    async def test_method_decorator_successful_call(self) -> None:
+        """Test decorator works correctly on class methods for successful calls."""
+        service = self.MockService()
+        result = await service.test_method(42)
+        assert result == "42"
+
+    @pytest.mark.asyncio
+    async def test_method_decorator_http_error_handling(self) -> None:
+        """Test decorator handles HTTP errors correctly on class methods."""
+        service = self.MockService()
+
+        with pytest.raises(AuthenticationRequiredError) as exc_info:
+            await service.method_that_raises_http_error()
+
+        assert (
+            exc_info.value.message
+            == "Authentication required. Please check your Trakt API credentials."
+        )
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["error_type"] == "auth_required"
+
+    @pytest.mark.asyncio
+    async def test_method_decorator_request_error_handling(self) -> None:
+        """Test decorator handles request errors correctly on class methods."""
+        service = self.MockService()
+
+        with pytest.raises(InternalError) as exc_info:
+            await service.method_that_raises_request_error()
+
+        assert (
+            exc_info.value.message
+            == "Unable to connect to Trakt API. Please check your internet connection."
+        )
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["error_type"] == "request_error"
+
+    @pytest.mark.asyncio
+    async def test_method_decorator_auto_clears_token_on_401(self) -> None:
+        """Test decorator auto-clears token when 401 error occurs."""
+        service = self.MockServiceWithClearAuth()
+
+        # Verify token hasn't been cleared yet
+        assert service.clear_auth_token_called is False
+
+        with pytest.raises(AuthenticationRequiredError):
+            await service.method_that_raises_401()
+
+        # Verify clear_auth_token was called
+        assert service.clear_auth_token_called is True
+
+    @pytest.mark.asyncio
+    async def test_method_decorator_does_not_clear_token_on_other_errors(self) -> None:
+        """Test decorator does not clear token for non-401 errors."""
+        service = self.MockServiceWithClearAuth()
+
+        with pytest.raises(TraktResourceNotFoundError):
+            await service.method_that_raises_404()
+
+        # Verify clear_auth_token was NOT called
+        assert service.clear_auth_token_called is False
+
+
+class TestDecoratorIntegration:
+    """Test decorator integration and edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_nested_decorators_compatibility(self) -> None:
+        """Test decorator works with other decorators."""
+        call_order: list[str] = []
+
+        def outer_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
+                call_order.append("outer_start")
+                result = await func(*args, **kwargs)
+                call_order.append("outer_end")
+                return result
+
+            return wrapper
+
+        @outer_decorator
+        @handle_api_errors_func
+        async def test_func() -> str:
+            call_order.append("inner")
+            return "success"
+
+        result = await test_func()
+
+        assert result == "success"
+        assert call_order == ["outer_start", "inner", "outer_end"]
+
+    @pytest.mark.asyncio
+    async def test_decorator_with_none_return(self) -> None:
+        """Test decorator handles functions that return None."""
+
+        @handle_api_errors_func
+        async def test_func() -> None:
+            return None
+
+        result = await test_func()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_decorator_preserves_exceptions_from_inner_decorators(self) -> None:
+        """Test decorator preserves the proper error handling chain."""
+
+        def inner_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            async def wrapper(*args: Any, **kwargs: Any) -> Any:
+                # This decorator raises its own HTTP error
+                mock_response = MagicMock()
+                mock_response.status_code = 400
+                mock_response.text = "Bad Request"
+                raise httpx.HTTPStatusError(
+                    "400 Bad Request", request=MagicMock(), response=mock_response
+                )
+
+            return wrapper
+
+        @handle_api_errors_func
+        @inner_decorator
+        async def test_func() -> str:
+            return "should not reach here"
+
+        with pytest.raises(InvalidParamsError) as exc_info:
+            await test_func()
+
+        assert "bad request" in exc_info.value.message.lower()
+        assert exc_info.value.data is not None
+        assert exc_info.value.data["http_status"] == 400
+        assert exc_info.value.data["details"] == "Bad Request"
+
+    @pytest.mark.asyncio
+    async def test_auth_error_returns_friendly_message(self) -> None:
+        """Test AuthenticationRequiredError is caught and returns a friendly message."""
+
+        @handle_api_errors_func
+        async def test_func() -> str:
+            raise AuthenticationRequiredError("access shows")
+
+        result = await test_func()
+
+        assert isinstance(result, str)
+        assert "Authentication Required" in result
+        assert "access shows" in result
+        assert "start_device_auth" in result
+
+
+class TestHandleApiErrors401RefreshAndRetry:
+    """Test 401 refresh-and-retry behavior in handle_api_errors."""
+
+    class MockRefreshableService:
+        """Mock service with refresh capability."""
+
+        def __init__(self) -> None:
+            self.call_count = 0
+            self.refresh_called = False
+            self.clear_auth_token_called = False
+            self.auth_token = MagicMock(refresh_token="valid_refresh_token")
+            self.refresh_result: bool = True
+
+        def clear_auth_token(self) -> bool:
+            self.clear_auth_token_called = True
+            return True
+
+        async def refresh_access_token(self) -> bool:
+            self.refresh_called = True
+            return self.refresh_result
+
+        @handle_api_errors
+        async def method_fails_then_succeeds(self) -> str:
+            """Raises 401 on first call, succeeds on second."""
+            self.call_count += 1
+            if self.call_count == 1:
+                mock_response = MagicMock()
+                mock_response.status_code = 401
+                mock_response.text = "Unauthorized"
+                raise httpx.HTTPStatusError(
+                    message="401 Unauthorized",
+                    request=MagicMock(),
+                    response=mock_response,
+                )
+            return "success"
+
+        @handle_api_errors
+        async def method_always_401(self) -> str:
+            """Always raises 401."""
+            self.call_count += 1
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.text = "Unauthorized"
+            raise httpx.HTTPStatusError(
+                message="401 Unauthorized",
+                request=MagicMock(),
+                response=mock_response,
+            )
+
+    @pytest.mark.asyncio
+    async def test_401_refresh_succeeds_and_retry_works(self) -> None:
+        """Test: 401 triggers refresh, refresh succeeds, retry succeeds."""
+        service = self.MockRefreshableService()
+        service.refresh_result = True
+
+        result = await service.method_fails_then_succeeds()
+
+        assert result == "success"
+        assert service.call_count == 2
+        assert service.refresh_called is True
+        assert service.clear_auth_token_called is False
+
+    @pytest.mark.asyncio
+    async def test_401_refresh_fails_clears_token_and_raises(self) -> None:
+        """Test: 401 triggers refresh, refresh fails, clears token and raises."""
+        service = self.MockRefreshableService()
+        service.refresh_result = False
+
+        with pytest.raises(AuthenticationRequiredError):
+            await service.method_fails_then_succeeds()
+
+        assert service.call_count == 1
+        assert service.refresh_called is True
+        assert service.clear_auth_token_called is True
+
+    @pytest.mark.asyncio
+    async def test_401_no_refresh_token_clears_and_raises(self) -> None:
+        """Test: 401 with no refresh token available clears and raises."""
+        service = self.MockRefreshableService()
+        service.auth_token = MagicMock(refresh_token="")
+
+        with pytest.raises(AuthenticationRequiredError):
+            await service.method_fails_then_succeeds()
+
+        assert service.call_count == 1
+        assert service.refresh_called is False
+        assert service.clear_auth_token_called is True
+
+    @pytest.mark.asyncio
+    async def test_401_retry_also_401_no_infinite_loop(self) -> None:
+        """Test: refresh succeeds but retry also gets 401 — no infinite loop."""
+        service = self.MockRefreshableService()
+        service.refresh_result = True
+
+        with pytest.raises(AuthenticationRequiredError):
+            await service.method_always_401()
+
+        # Called twice: first attempt + one retry
+        assert service.call_count == 2
+        assert service.refresh_called is True
+        # Token cleared after retry failure
+        assert service.clear_auth_token_called is True
+
+    @pytest.mark.asyncio
+    async def test_401_refresh_raises_exception_clears_and_raises(self) -> None:
+        """Test: refresh raises exception, clears token and raises original error."""
+
+        class BrokenRefreshService(self.MockRefreshableService):
+            async def refresh_access_token(self) -> bool:
+                self.refresh_called = True
+                raise RuntimeError("Refresh endpoint down")
+
+        service = BrokenRefreshService()
+
+        with pytest.raises(AuthenticationRequiredError):
+            await service.method_fails_then_succeeds()
+
+        assert service.call_count == 1
+        assert service.refresh_called is True
+        assert service.clear_auth_token_called is True
+
+    @pytest.mark.asyncio
+    async def test_non_401_errors_do_not_trigger_refresh(self) -> None:
+        """Test: non-401 errors skip refresh entirely."""
+        service = self.MockRefreshableService()
+
+        @handle_api_errors
+        async def method_404(
+            self_obj: TestHandleApiErrors401RefreshAndRetry.MockRefreshableService,
+        ) -> str:
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_response.text = "Not Found"
+            raise httpx.HTTPStatusError(
+                message="404 Not Found",
+                request=MagicMock(),
+                response=mock_response,
+            )
+
+        with pytest.raises(TraktResourceNotFoundError):
+            await method_404(service)
+
+        assert service.refresh_called is False
+        assert service.clear_auth_token_called is False
+
+    @pytest.mark.asyncio
+    async def test_401_on_non_refreshable_client_clears_and_raises(self) -> None:
+        """Test: 401 on client without refresh support just clears and raises."""
+
+        class ClearOnlyService:
+            def __init__(self) -> None:
+                self.clear_auth_token_called = False
+
+            def clear_auth_token(self) -> bool:
+                self.clear_auth_token_called = True
+                return True
+
+            @handle_api_errors
+            async def method_401(self) -> str:
+                mock_response = MagicMock()
+                mock_response.status_code = 401
+                mock_response.text = "Unauthorized"
+                raise httpx.HTTPStatusError(
+                    message="401 Unauthorized",
+                    request=MagicMock(),
+                    response=mock_response,
+                )
+
+        service = ClearOnlyService()
+
+        with pytest.raises(AuthenticationRequiredError):
+            await service.method_401()
+
+        assert service.clear_auth_token_called is True
