@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "trakt-mcp": {
+      "command": "C:/mcp/trakt-mcp/.venv/Scripts/python.exe",
+      "args": [
+        "C:/mcp/trakt-mcp/server.py"
+      ],
+      "env": {
+        "TRAKT_CLIENT_ID": "REPLACE_LOCALLY",
+        "TRAKT_CLIENT_SECRET": "REPLACE_LOCALLY"
+      }
+    }
+  }
+}

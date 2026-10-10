@@ -76,7 +76,17 @@ def create_server() -> FastMCP:
     except PackageNotFoundError:
         version = "0.0.0+dev"
     logger.info("Starting trakt-mcp v%s", version)
-    mcp = FastMCP(name="trakt-films-series", lifespan=_lifespan)
+    mcp = FastMCP(
+        name="trakt-films-series",
+        lifespan=_lifespan,
+        instructions=(
+            "Use Trakt tools for movie, show and personal library data. "
+            "Check authentication before accessing the connected account. "
+            "Ask for confirmation before changing history, ratings, watchlists, "
+            "comments or check-ins. Never request client secrets or OAuth tokens "
+            "in chat; configure them locally."
+        ),
+    )
     for register in REGISTRATIONS:
         register(mcp)
     logger.info("All Trakt MCP modules registered successfully")
