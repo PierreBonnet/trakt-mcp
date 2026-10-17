@@ -1,33 +1,64 @@
 # trakt-mcp
 
 [![Soutenir sur Ko-fi](https://img.shields.io/badge/Ko--fi-Soutenir%20le%20projet-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/pierrobn)
-Community derivative of [wwiens/trakt_mcpserver](https://github.com/wwiens/trakt_mcpserver), prepared for public source distribution. The upstream MIT license and required attribution are retained. This repository starts with a fresh Git history.
 
-## Install and run
+Serveur MCP pour explorer les films et séries et accéder aux données de votre compte Trakt. Dérivé communautaire de [wwiens/trakt_mcpserver](https://github.com/wwiens/trakt_mcpserver), sous licence MIT ; les attributions d'origine sont conservées.
 
-Requires Python 3.12 or later. The test suite also requires Node.js 22 or later for the pinned MCP Inspector.
+## Installation
+
+Prérequis pour utiliser le serveur : **Python 3.12 ou plus récent**.
 
 ```sh
+git clone https://github.com/pierro-bn/trakt-mcp.git
+cd trakt-mcp
 python -m venv .venv
-# Activate .venv using the command appropriate to your shell.
+```
+
+Activez l'environnement avec `.venv\Scripts\Activate.ps1` sous PowerShell ou `source .venv/bin/activate` sous macOS/Linux, puis :
+
+```sh
 python -m pip install -e .
+```
+
+Configurez votre client MCP pour lancer l'exécutable installé `trakt-mcp` sur **stdio**, avec `TRAKT_CLIENT_ID` dans son environnement.
+
+| Variable | Utilisation |
+| --- | --- |
+| `TRAKT_CLIENT_ID` | Client ID de votre application Trakt |
+| `TRAKT_CLIENT_SECRET` | Facultatif ; omis pour la connexion habituelle par code d'appareil, accepté au rafraîchissement s'il est configuré |
+| `TRAKT_AUTH_TOKEN_PATH` | Chemin local du jeton ; par défaut `~/.trakt-mcp/auth_token.json` |
+
+## Fonctionnalités et connexion
+
+Recherche de films et séries, tendances, fiches, saisons, épisodes, personnes et commentaires ; historique personnel, notes, watchlist, progression et recommandations.
+
+Depuis l'assistant connecté, appelez `start_device_auth`, ouvrez le lien fourni et saisissez le code. Une fois l'autorisation terminée, appelez `check_auth_status`. `clear_auth` supprime la connexion locale.
+
+**Ce serveur peut modifier le compte** : historique, notes, watchlist, check-ins, recommandations masquées et progression de lecture. Il demande à l'assistant d'obtenir une confirmation avant les changements ; il ne possède pas le mécanisme d'aperçu/jeton de validation de TIDAL. Réglez les autorisations d'outils dans votre client selon vos besoins.
+
+Exemple : « Consulte mes films vus et propose cinq films que je n'ai pas encore regardés. »
+
+## Développement
+
+Les tests demandent aussi **Node.js 22 ou plus récent** pour le MCP Inspector :
+
+```sh
 python -m pip install -r requirements-dev.txt
 npm ci --ignore-scripts
 python -m pytest
-trakt-mcp
 ```
 
-Set `TRAKT_CLIENT_ID` locally using your own Trakt application's Client ID. `TRAKT_CLIENT_SECRET` is not required for this server's device-code sign-in and should be omitted from the normal configuration. The code still accepts it optionally when refreshing tokens if explicitly configured. Configure your MCP client to launch the installed `trakt-mcp` executable over stdio. OAuth tokens default to `~/.trakt-mcp/auth_token.json`; `TRAKT_AUTH_TOKEN_PATH` can override this local storage path.
+Node.js est requis pour cette suite de vérification, pas pour exécuter le serveur Python.
 
-## Privacy
+## Confidentialité
 
-No account configuration, OAuth sessions, personal exports, or local Git history are distributed. Examples and tests use fixtures. Never commit your local credentials or session files. Runtime tools can return information from the account you connect; review outputs before sharing them.
+Ne commitez pas vos clés, jetons, fichiers de session ou exports personnels. Les outils peuvent renvoyer des données du compte connecté au client MCP ; vérifiez ces résultats avant de les partager.
 
 ## Changes in this derivative
 
 Structured log fields recursively redact common credential keys without mutating the original request data. Regression tests cover nested headers and token fields.
 
-Only GitHub source distribution is configured; this derivative is not published to npm or PyPI.
+Cette version est distribuée sous forme de sources sur GitHub, sans publication npm ou PyPI.
 
 ## Claude et ChatGPT
 
@@ -60,7 +91,7 @@ Installe d'abord le projet avec les commandes ci-dessus. Ouvre la configuration 
 }
 ```
 
-Un [fichier exemple](examples/claude_desktop_config.example.json) est fourni. Remplace les chemins génériques et les valeurs `REPLACE_…` uniquement dans ta configuration privée. Sous macOS/Linux, utilise le chemin absolu du dépôt et `.venv/bin/python` à la place de `.venv/Scripts/python.exe`. Pour Steam, utilise le chemin absolu de Node si Claude ne le trouve pas. Aucun terminal interactif ne doit être nécessaire au démarrage. Redémarre Claude après modification.
+Un [fichier exemple](examples/claude_desktop_config.example.json) est fourni. Remplace les chemins génériques et les valeurs `REPLACE_…` uniquement dans ta configuration privée. Sous macOS/Linux, utilise le chemin absolu du dépôt et `.venv/bin/python` à la place de `.venv/Scripts/python.exe`. Aucun terminal interactif ne doit être nécessaire au démarrage. Redémarre Claude après modification.
 
 ### Claude Code
 
@@ -96,7 +127,7 @@ Trakt recommande PKCE pour le flux OAuth avec redirection et indique que le Clie
 
 Essaie : « Vérifie mon authentification Trakt avec check_auth_status. » Les résultats des outils et ressources peuvent contenir des données de ton compte ; le client qui les consulte les reçoit. Si le serveur ne démarre pas, vérifie les chemins absolus, l'installation des dépendances et les variables d'environnement. Si ChatGPT ne propose pas ton tunnel, vérifie ses droits et son rattachement à l'espace. Ne renseigne pas l'URL GitHub comme URL de serveur MCP.
 
-Références : [Claude local](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop), [Claude Code MCP](https://code.claude.com/docs/en/mcp), [connecteurs Claude distants](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp). Documentation vérifiée le 10 octobre 2026.
+Références : [Claude local](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop), [Claude Code MCP](https://code.claude.com/docs/en/mcp), [connecteurs Claude distants](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp). Voir ces guides pour les réglages propres à chaque client.
 
 ## Soutenir le projet
 
